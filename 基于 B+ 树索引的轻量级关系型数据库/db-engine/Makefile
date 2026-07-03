@@ -3,20 +3,24 @@ CFLAGS = -Wall -Wextra -g -I./src
 LDFLAGS = 
 
 SRCS = src/disk_manager.c src/bplus_tree.c src/buffer_pool.c
+SRCS += src/lexer.c
 TEST_DISK_SRCS = tests/test_disk_manager.c
 TEST_BPT_SRCS = tests/test_bpt.c
 TEST_BUFFER_SRCS = tests/test_buffer_pool.c
+TEST_LEXER_SRCS = tests/test_lexer.c
 OBJS = $(SRCS:.c=.o)
 TEST_DISK_OBJS = $(TEST_DISK_SRCS:.c=.o)
 TEST_BPT_OBJS = $(TEST_BPT_SRCS:.c=.o)
 TEST_BUFFER_OBJS = $(TEST_BUFFER_SRCS:.c=.o)
+TEST_LEXER_OBJS = $(TEST_LEXER_SRCS:.c=.o)
 
 TARGET = libdbengine.a
 TEST_DISK_TARGET = test_disk_manager
 TEST_BPT_TARGET = test_bpt
 TEST_BUFFER_TARGET = test_buffer_pool
+TEST_LEXER_TARGET = test_lexer
 
-all: $(TARGET) $(TEST_DISK_TARGET) $(TEST_BPT_TARGET) $(TEST_BUFFER_TARGET)
+all: $(TARGET) $(TEST_DISK_TARGET) $(TEST_BPT_TARGET) $(TEST_BUFFER_TARGET) $(TEST_LEXER_TARGET)
 
 $(TARGET): $(OBJS)
 	ar rcs $@ $^
@@ -28,6 +32,9 @@ $(TEST_BPT_TARGET): $(TEST_BPT_OBJS) $(TARGET)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(TEST_BUFFER_TARGET): $(TEST_BUFFER_OBJS) $(TARGET)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(TEST_LEXER_TARGET): $(TEST_LEXER_OBJS) $(TARGET)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 %.o: %.c
