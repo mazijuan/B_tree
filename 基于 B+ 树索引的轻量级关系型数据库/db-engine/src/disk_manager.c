@@ -75,14 +75,15 @@ DBStatus dm_read_page(DiskManager* dm, page_id_t page_id, Page* page) {
     if (fseek(dm->fd, offset, SEEK_SET) != 0) return DB_FILE_ERROR;
 
     size_t bytes_read = fread(page->data, 1, PAGE_SIZE, dm->fd);
-    if (bytes_read != PAGE_SIZE) return DB_FILE_ERROR;
+    if (bytes_read != PAGE_SIZE) {
+        memset(page->data, 0, PAGE_SIZE);
+    }
 
     return DB_OK;
 }
 
 DBStatus dm_write_page(DiskManager* dm, page_id_t page_id, const Page* page) {
     if (dm == NULL || page == NULL) return DB_ERROR;
-    if (page_id >= dm->num_pages) return DB_PAGE_NOT_FOUND;
 
     long offset = FILE_HEADER_SIZE + (long)page_id * PAGE_SIZE;
     if (fseek(dm->fd, offset, SEEK_SET) != 0) return DB_FILE_ERROR;
@@ -90,7 +91,12 @@ DBStatus dm_write_page(DiskManager* dm, page_id_t page_id, const Page* page) {
     size_t bytes_written = fwrite(page->data, 1, PAGE_SIZE, dm->fd);
     if (bytes_written != PAGE_SIZE) return DB_FILE_ERROR;
 
-    fflush(dm->fd);
+    if (page_id >= dm->num_pages) {
+        dm->num_pages = page_id + 1;
+        dm_save_header(dm);
+    }
+
+    if (fflush(dm->fd) != 0) return DB_FILE_ERROR;
     return DB_OK;
 }
 
@@ -106,6 +112,11 @@ page_id_t dm_allocate_page(DiskManager* dm) {
                 dm->num_pages = i + 1;
                 dm_save_header(dm);
             }
+
+            Page empty_page;
+            memset(&empty_page, 0, sizeof(Page));
+            dm_write_page(dm, i, &empty_page);
+
             return i;
         }
     }
