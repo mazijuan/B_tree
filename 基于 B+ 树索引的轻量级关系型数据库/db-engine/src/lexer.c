@@ -171,6 +171,9 @@ Token* lexer_next_token(Lexer* lexer) {
         case '*':
             lexer_next(lexer);
             return create_token(lexer, TK_ASTERISK, NULL);
+        case '-':
+            lexer_next(lexer);
+            return create_token(lexer, TK_MINUS, NULL);
     }
 
     lexer_next(lexer);
@@ -212,6 +215,7 @@ const char* token_type_to_string(TokenType type) {
         case TK_LPAREN: return "TK_LPAREN";
         case TK_RPAREN: return "TK_RPAREN";
         case TK_ASTERISK: return "TK_ASTERISK";
+        case TK_MINUS: return "TK_MINUS";
         default: return "TK_UNKNOWN";
     }
 }

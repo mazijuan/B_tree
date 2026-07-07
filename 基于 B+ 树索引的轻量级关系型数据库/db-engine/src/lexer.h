@@ -29,7 +29,8 @@ typedef enum {
     TK_SEMICOLON,
     TK_LPAREN,
     TK_RPAREN,
-    TK_ASTERISK
+    TK_ASTERISK,
+    TK_MINUS
 } TokenType;
 
 typedef struct {

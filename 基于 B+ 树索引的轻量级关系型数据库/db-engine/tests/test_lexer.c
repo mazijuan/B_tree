@@ -307,7 +307,11 @@ static void test_integer() {
     token_destroy(t);
 
     t = lexer_next_token(lexer);
-    if (t->type != TK_IDENTIFIER || strcmp(t->value, "-1") != 0) { FAIL("negative should be identifier"); token_destroy(t); lexer_destroy(lexer); return; }
+    if (t->type != TK_MINUS) { FAIL("expected TK_MINUS"); token_destroy(t); lexer_destroy(lexer); return; }
+    token_destroy(t);
+
+    t = lexer_next_token(lexer);
+    if (t->type != TK_INTEGER || strcmp(t->value, "1") != 0) { FAIL("expected '1'"); token_destroy(t); lexer_destroy(lexer); return; }
     token_destroy(t);
 
     t = lexer_next_token(lexer);
