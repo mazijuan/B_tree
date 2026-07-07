@@ -4,7 +4,6 @@
 #include <stdint.h>
 
 typedef enum {
-    TK_BAD_TOKEN,
     TK_EOF,
     TK_IDENTIFIER,
     TK_INTEGER,
