@@ -182,6 +182,298 @@ static DBStatus bpt_insert_into_parent(BPlusTree* tree, BPTNode* left,
     return DB_OK;
 }
 
+// ===== 删除辅助函数 =====
+
+// 从叶子节点中删除指定位置的键
+static void bpt_leaf_remove_at(BPTNode* leaf, int pos) {
+    for (int i = pos; i < leaf->key_count - 1; i++) {
+        leaf->keys[i] = leaf->keys[i + 1];
+        leaf->records[i] = leaf->records[i + 1];
+    }
+    leaf->key_count--;
+}
+
+// 从内部节点中删除指定位置的键和对应的右子节点
+static void bpt_internal_remove_at(BPTNode* node, int key_pos) {
+    // 删除key_pos位置的键和key_pos+1位置的子节点（右子节点）
+    for (int i = key_pos; i < node->key_count - 1; i++) {
+        node->keys[i] = node->keys[i + 1];
+        node->children[i + 1] = node->children[i + 2];
+    }
+    node->key_count--;
+}
+
+// 获取节点在父节点中的子节点索引
+static int bpt_get_index_in_parent(BPTNode* node) {
+    BPTNode* parent = node->parent;
+    if (parent == NULL) return -1;
+    for (int i = 0; i <= parent->key_count; i++) {
+        if (parent->children[i] == node) return i;
+    }
+    return -1;
+}
+
+// 获取左兄弟节点（同父），没有返回NULL
+static BPTNode* bpt_get_left_sibling(BPTNode* node) {
+    int idx = bpt_get_index_in_parent(node);
+    if (idx <= 0) return NULL;
+    return node->parent->children[idx - 1];
+}
+
+// 获取右兄弟节点（同父），没有返回NULL
+static BPTNode* bpt_get_right_sibling(BPTNode* node) {
+    int idx = bpt_get_index_in_parent(node);
+    if (idx < 0 || idx >= node->parent->key_count) return NULL;
+    return node->parent->children[idx + 1];
+}
+
+// 从左兄弟借一个键（叶子节点）
+static void bpt_borrow_from_left_leaf(BPTNode* node, BPTNode* left_sibling, int parent_key_idx) {
+    // 将node所有键右移一位
+    for (int i = node->key_count; i > 0; i--) {
+        node->keys[i] = node->keys[i - 1];
+        node->records[i] = node->records[i - 1];
+    }
+    // 从左兄弟取最后一个键
+    node->keys[0] = left_sibling->keys[left_sibling->key_count - 1];
+    node->records[0] = left_sibling->records[left_sibling->key_count - 1];
+    node->key_count++;
+    left_sibling->key_count--;
+
+    // 更新父节点中的分隔键
+    node->parent->keys[parent_key_idx] = node->keys[0];
+}
+
+// 从右兄弟借一个键（叶子节点）
+static void bpt_borrow_from_right_leaf(BPTNode* node, BPTNode* right_sibling, int parent_key_idx) {
+    // 从右兄弟取第一个键
+    node->keys[node->key_count] = right_sibling->keys[0];
+    node->records[node->key_count] = right_sibling->records[0];
+    node->key_count++;
+
+    // 右兄弟键左移
+    for (int i = 0; i < right_sibling->key_count - 1; i++) {
+        right_sibling->keys[i] = right_sibling->keys[i + 1];
+        right_sibling->records[i] = right_sibling->records[i + 1];
+    }
+    right_sibling->key_count--;
+
+    // 更新父节点中的分隔键
+    node->parent->keys[parent_key_idx] = right_sibling->keys[0];
+}
+
+// 与左兄弟合并（叶子节点），node的内容合并到left_sibling中
+static void bpt_merge_left_leaf(BPTNode* node, BPTNode* left_sibling, int parent_key_idx) {
+    // 将node的所有键追加到左兄弟
+    for (int i = 0; i < node->key_count; i++) {
+        left_sibling->keys[left_sibling->key_count + i] = node->keys[i];
+        left_sibling->records[left_sibling->key_count + i] = node->records[i];
+    }
+    left_sibling->key_count += node->key_count;
+
+    // 维护叶子链表
+    left_sibling->next = node->next;
+    if (node->next != NULL) {
+        node->next->prev = left_sibling;
+    }
+
+    // 从父节点中删除分隔键和node指针
+    bpt_internal_remove_at(node->parent, parent_key_idx);
+
+    // 释放node
+    free(node);
+}
+
+// 与右兄弟合并（叶子节点），right_sibling的内容合并到node中
+static void bpt_merge_right_leaf(BPTNode* node, BPTNode* right_sibling, int parent_key_idx) {
+    // 将右兄弟的所有键追加到node
+    for (int i = 0; i < right_sibling->key_count; i++) {
+        node->keys[node->key_count + i] = right_sibling->keys[i];
+        node->records[node->key_count + i] = right_sibling->records[i];
+    }
+    node->key_count += right_sibling->key_count;
+
+    // 维护叶子链表
+    node->next = right_sibling->next;
+    if (right_sibling->next != NULL) {
+        right_sibling->next->prev = node;
+    }
+
+    // 从父节点中删除分隔键和右兄弟指针
+    // parent_key_idx 是指向node的子节点索引，分隔键在parent_key_idx位置
+    bpt_internal_remove_at(node->parent, parent_key_idx);
+
+    // 释放右兄弟
+    free(right_sibling);
+}
+
+// 从左兄弟借一个键（内部节点）
+static void bpt_borrow_from_left_internal(BPTNode* node, BPTNode* left_sibling, int parent_key_idx) {
+    // node所有键和子节点右移一位
+    for (int i = node->key_count; i > 0; i--) {
+        node->keys[i] = node->keys[i - 1];
+    }
+    for (int i = node->key_count + 1; i > 0; i--) {
+        node->children[i] = node->children[i - 1];
+    }
+
+    // 从父节点取下分隔键放到node的第一个位置
+    node->keys[0] = node->parent->keys[parent_key_idx];
+    // 左兄弟的最后一个子节点变成node的第一个子节点
+    node->children[0] = left_sibling->children[left_sibling->key_count];
+    if (node->children[0] != NULL) {
+        node->children[0]->parent = node;
+    }
+    node->key_count++;
+
+    // 父节点的分隔键替换为左兄弟的最后一个键
+    node->parent->keys[parent_key_idx] = left_sibling->keys[left_sibling->key_count - 1];
+    left_sibling->key_count--;
+}
+
+// 从右兄弟借一个键（内部节点）
+static void bpt_borrow_from_right_internal(BPTNode* node, BPTNode* right_sibling, int parent_key_idx) {
+    // 从父节点取下分隔键放到node的末尾
+    node->keys[node->key_count] = node->parent->keys[parent_key_idx];
+    // 右兄弟的第一个子节点变成node的最后一个子节点
+    node->children[node->key_count + 1] = right_sibling->children[0];
+    if (node->children[node->key_count + 1] != NULL) {
+        node->children[node->key_count + 1]->parent = node;
+    }
+    node->key_count++;
+
+    // 父节点的分隔键替换为右兄弟的第一个键
+    node->parent->keys[parent_key_idx] = right_sibling->keys[0];
+
+    // 右兄弟键和子节点左移
+    for (int i = 0; i < right_sibling->key_count - 1; i++) {
+        right_sibling->keys[i] = right_sibling->keys[i + 1];
+    }
+    for (int i = 0; i < right_sibling->key_count; i++) {
+        right_sibling->children[i] = right_sibling->children[i + 1];
+    }
+    right_sibling->key_count--;
+}
+
+// 与左兄弟合并（内部节点）
+static void bpt_merge_left_internal(BPTNode* node, BPTNode* left_sibling, int parent_key_idx) {
+    // 从父节点取下分隔键
+    left_sibling->keys[left_sibling->key_count] = node->parent->keys[parent_key_idx];
+    left_sibling->key_count++;
+
+    // 将node的所有键和子节点追加到左兄弟
+    for (int i = 0; i < node->key_count; i++) {
+        left_sibling->keys[left_sibling->key_count + i] = node->keys[i];
+    }
+    for (int i = 0; i <= node->key_count; i++) {
+        left_sibling->children[left_sibling->key_count + i] = node->children[i];
+        if (left_sibling->children[left_sibling->key_count + i] != NULL) {
+            left_sibling->children[left_sibling->key_count + i]->parent = left_sibling;
+        }
+    }
+    left_sibling->key_count += node->key_count;
+
+    // 从父节点中删除分隔键和node指针
+    bpt_internal_remove_at(node->parent, parent_key_idx);
+
+    free(node);
+}
+
+// 与右兄弟合并（内部节点）
+static void bpt_merge_right_internal(BPTNode* node, BPTNode* right_sibling, int parent_key_idx) {
+    // 从父节点取下分隔键
+    node->keys[node->key_count] = node->parent->keys[parent_key_idx];
+    node->key_count++;
+
+    // 将右兄弟的所有键和子节点追加到node
+    for (int i = 0; i < right_sibling->key_count; i++) {
+        node->keys[node->key_count + i] = right_sibling->keys[i];
+    }
+    for (int i = 0; i <= right_sibling->key_count; i++) {
+        node->children[node->key_count + i] = right_sibling->children[i];
+        if (node->children[node->key_count + i] != NULL) {
+            node->children[node->key_count + i]->parent = node;
+        }
+    }
+    node->key_count += right_sibling->key_count;
+
+    // 从父节点中删除分隔键和右兄弟指针
+    bpt_internal_remove_at(node->parent, parent_key_idx);
+
+    free(right_sibling);
+}
+
+// 删除后处理节点下溢（键数太少）
+static DBStatus bpt_handle_underflow(BPlusTree* tree, BPTNode* node) {
+    if (node == NULL) return DB_ERROR;
+
+    // 根节点不需要满足最少键数要求
+    if (node->parent == NULL) {
+        // 如果根是内部节点且只有一个子节点，则子节点成为新根
+        if (!node->is_leaf && node->key_count == 0) {
+            BPTNode* new_root = node->children[0];
+            new_root->parent = NULL;
+            tree->root = new_root;
+            tree->height--;
+            free(node);
+        }
+        // 如果根是叶子节点且没有键了，树变空（root仍保留为空叶子）
+        return DB_OK;
+    }
+
+    // 检查是否真的下溢
+    if (node->key_count >= BPT_ORDER) {
+        return DB_OK;
+    }
+
+    BPTNode* left = bpt_get_left_sibling(node);
+    BPTNode* right = bpt_get_right_sibling(node);
+    int idx = bpt_get_index_in_parent(node);
+
+    // 尝试从左兄弟借键
+    if (left != NULL && left->key_count > BPT_ORDER) {
+        if (node->is_leaf) {
+            bpt_borrow_from_left_leaf(node, left, idx - 1);
+        } else {
+            bpt_borrow_from_left_internal(node, left, idx - 1);
+        }
+        return DB_OK;
+    }
+
+    // 尝试从右兄弟借键
+    if (right != NULL && right->key_count > BPT_ORDER) {
+        if (node->is_leaf) {
+            bpt_borrow_from_right_leaf(node, right, idx);
+        } else {
+            bpt_borrow_from_right_internal(node, right, idx);
+        }
+        return DB_OK;
+    }
+
+    // 无法借键，需要合并
+    if (left != NULL) {
+        // 与左兄弟合并
+        if (node->is_leaf) {
+            bpt_merge_left_leaf(node, left, idx - 1);
+        } else {
+            bpt_merge_left_internal(node, left, idx - 1);
+        }
+        // 合并后父节点可能下溢，递归处理
+        return bpt_handle_underflow(tree, left->parent);
+    } else if (right != NULL) {
+        // 与右兄弟合并
+        if (node->is_leaf) {
+            bpt_merge_right_leaf(node, right, idx);
+        } else {
+            bpt_merge_right_internal(node, right, idx);
+        }
+        // 合并后父节点可能下溢，递归处理
+        return bpt_handle_underflow(tree, node->parent);
+    }
+
+    return DB_ERROR; // 不应该到达这里
+}
+
 // ===== 公开API =====
 
 // 创建一棵空B+树
@@ -277,6 +569,37 @@ DBStatus bpt_search(BPlusTree* tree, bpt_key_t key, RecordPointer* out_rid) {
     return DB_PAGE_NOT_FOUND; // 未找到
 }
 
+// 删除键值对
+DBStatus bpt_delete(BPlusTree* tree, bpt_key_t key) {
+    if (tree == NULL) return DB_ERROR;
+
+    // 1. 找到目标叶子节点
+    BPTNode* cur = tree->root;
+    while (!cur->is_leaf) {
+        int idx = bpt_find_child_index(cur, key);
+        cur = cur->children[idx];
+    }
+
+    // 2. 在叶子节点中查找键
+    int pos = bpt_find_key_index(cur, key);
+    if (pos >= cur->key_count || cur->keys[pos] != key) {
+        // 检查下一个叶子（边界情况）
+        if (cur->next != NULL && cur->next->keys[0] == key) {
+            cur = cur->next;
+            pos = 0;
+        } else {
+            return DB_PAGE_NOT_FOUND; // 键不存在
+        }
+    }
+
+    // 3. 从叶子节点中删除键
+    bpt_leaf_remove_at(cur, pos);
+    tree->count--;
+
+    // 4. 处理可能的下溢
+    return bpt_handle_underflow(tree, cur);
+}
+
 // 范围查询
 DBStatus bpt_range_query(BPlusTree* tree, bpt_key_t low, bpt_key_t high,
                           BPTRangeCallback cb, void* ctx) {
@@ -351,17 +674,19 @@ void bpt_print(BPlusTree* tree) {
 static DBStatus bpt_validate_node(BPTNode* node, int is_root, bpt_key_t* min_out, bpt_key_t* max_out) {
     if (node == NULL) return DB_OK;
 
-    // 检查键数范围
-    if (!is_root) {
-        if (node->key_count < BPT_ORDER || node->key_count > BPT_MAX_KEYS) {
-            printf("VALIDATE FAIL: node key_count=%d (min=%d, max=%d)\n",
-                   node->key_count, BPT_ORDER, BPT_MAX_KEYS);
+    // 根节点特殊处理：如果是叶子且key_count==0，允许（空树）
+    if (is_root) {
+        if (node->is_leaf && node->key_count == 0) {
+            return DB_OK;
+        }
+        if (node->key_count < 1 || node->key_count > BPT_MAX_KEYS) {
+            printf("VALIDATE FAIL: root key_count=%d\n", node->key_count);
             return DB_ERROR;
         }
     } else {
-        // 根节点至少1个键（除非空树）
-        if (node->key_count < 1 || node->key_count > BPT_MAX_KEYS) {
-            printf("VALIDATE FAIL: root key_count=%d\n", node->key_count);
+        if (node->key_count < BPT_ORDER || node->key_count > BPT_MAX_KEYS) {
+            printf("VALIDATE FAIL: node key_count=%d (min=%d, max=%d)\n",
+                   node->key_count, BPT_ORDER, BPT_MAX_KEYS);
             return DB_ERROR;
         }
     }
@@ -375,8 +700,10 @@ static DBStatus bpt_validate_node(BPTNode* node, int is_root, bpt_key_t* min_out
         }
     }
 
-    *min_out = node->keys[0];
-    *max_out = node->keys[node->key_count - 1];
+    if (node->key_count > 0) {
+        *min_out = node->keys[0];
+        *max_out = node->keys[node->key_count - 1];
+    }
 
     if (!node->is_leaf) {
         // 检查子节点数量 = key_count + 1
