@@ -1,8 +1,0 @@
-目录	文件	说明
-src/	types.h	基础类型定义（已修改：加struct tag）
-src/	disk_manager.h/c	磁盘I/O层（第1-2天，未动）
-src/	bplus_tree.h/c	B+树索引（第3天新增）
-tests/	test_disk_manager.c	磁盘管理测试
-tests/	test_bpt.c	B+树完整测试
-根目录	Makefile	GCC构建（已修改）
-根目录	build.bat	MSVC构建（已修改）
