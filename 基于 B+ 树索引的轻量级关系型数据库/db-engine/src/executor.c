@@ -60,6 +60,10 @@ void executor_destroy(Executor* executor) {
             if (table->records[j]) free(table->records[j]);
         }
         if (table->records) free(table->records);
+        for (int j = 0; j < table->column_count; j++) {
+            if (table->columns[j].name) free(table->columns[j].name);
+        }
+        if (table->columns) free(table->columns);
     }
     if (executor->tables) free(executor->tables);
     free(executor);
@@ -94,6 +98,8 @@ Table* executor_create_table(Executor* executor, const char* table_name) {
     table->records = NULL;
     table->record_count = 0;
     table->max_records = 0;
+    table->columns = NULL;
+    table->column_count = 0;
     
     return table;
 }
@@ -282,6 +288,38 @@ int execute_update(Executor* executor, UpdateStmt* stmt) {
     }
     
     return DB_ERROR;
+}
+
+int execute_create_table(Executor* executor, CreateTableStmt* stmt) {
+    if (executor == NULL || stmt == NULL) return DB_ERROR;
+    
+    if (executor_get_table(executor, stmt->table) != NULL) {
+        return DB_ERROR;
+    }
+    
+    if (executor->table_count >= executor->max_tables) {
+        executor->max_tables = executor->max_tables == 0 ? 8 : executor->max_tables * 2;
+        executor->tables = (Table*)realloc(executor->tables, executor->max_tables * sizeof(Table));
+    }
+    
+    Table* table = &executor->tables[executor->table_count++];
+    table->table_name = strdup(stmt->table);
+    table->index = bpt_create();
+    table->records = NULL;
+    table->record_count = 0;
+    table->max_records = 0;
+    table->column_count = stmt->column_count;
+    table->columns = NULL;
+    
+    if (stmt->column_count > 0 && stmt->columns != NULL) {
+        table->columns = (ColumnDef*)malloc(stmt->column_count * sizeof(ColumnDef));
+        for (int i = 0; i < stmt->column_count; i++) {
+            table->columns[i].name = strdup(stmt->columns[i].name);
+            table->columns[i].type = stmt->columns[i].type;
+        }
+    }
+    
+    return DB_OK;
 }
 
 void result_set_destroy(ResultSet* rs) {

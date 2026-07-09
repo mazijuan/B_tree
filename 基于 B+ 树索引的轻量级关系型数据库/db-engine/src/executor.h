@@ -22,6 +22,8 @@ typedef struct {
     char** records;
     int record_count;
     int max_records;
+    ColumnDef* columns;
+    int column_count;
 } Table;
 
 typedef struct {
@@ -39,6 +41,7 @@ ResultSet* execute_select(Executor* executor, SelectStmt* stmt);
 int execute_insert(Executor* executor, InsertStmt* stmt);
 int execute_delete(Executor* executor, DeleteStmt* stmt);
 int execute_update(Executor* executor, UpdateStmt* stmt);
+int execute_create_table(Executor* executor, CreateTableStmt* stmt);
 
 void result_set_destroy(ResultSet* rs);
 

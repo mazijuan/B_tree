@@ -58,6 +58,11 @@ static Token* lexer_read_identifier(Lexer* lexer) {
     if (strcmp(value, "UPDATE") == 0) return create_token(lexer, TK_UPDATE, NULL);
     if (strcmp(value, "SET") == 0) return create_token(lexer, TK_SET, NULL);
     if (strcmp(value, "VALUES") == 0) return create_token(lexer, TK_VALUES, NULL);
+    if (strcmp(value, "CREATE") == 0) return create_token(lexer, TK_CREATE, NULL);
+    if (strcmp(value, "TABLE") == 0) return create_token(lexer, TK_TABLE, NULL);
+    if (strcmp(value, "INT") == 0) return create_token(lexer, TK_INT, NULL);
+    if (strcmp(value, "VARCHAR") == 0) return create_token(lexer, TK_VARCHAR, NULL);
+    if (strcmp(value, "TEXT") == 0) return create_token(lexer, TK_TEXT, NULL);
     if (strcmp(value, "AND") == 0) return create_token(lexer, TK_AND, NULL);
     if (strcmp(value, "OR") == 0) return create_token(lexer, TK_OR, NULL);
 
@@ -202,6 +207,11 @@ const char* token_type_to_string(TokenType type) {
         case TK_UPDATE: return "TK_UPDATE";
         case TK_SET: return "TK_SET";
         case TK_VALUES: return "TK_VALUES";
+        case TK_CREATE: return "TK_CREATE";
+        case TK_TABLE: return "TK_TABLE";
+        case TK_INT: return "TK_INT";
+        case TK_VARCHAR: return "TK_VARCHAR";
+        case TK_TEXT: return "TK_TEXT";
         case TK_EQ: return "TK_EQ";
         case TK_NE: return "TK_NE";
         case TK_LT: return "TK_LT";

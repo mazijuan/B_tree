@@ -9,6 +9,7 @@ typedef enum {
     NODE_INSERT,
     NODE_DELETE,
     NODE_UPDATE,
+    NODE_CREATE_TABLE,
     NODE_EXPR,
     NODE_IDENTIFIER,
     NODE_INTEGER,
@@ -77,6 +78,23 @@ typedef struct {
     Expr* where;
 } UpdateStmt;
 
+typedef enum {
+    TYPE_INT,
+    TYPE_VARCHAR,
+    TYPE_TEXT
+} ColumnType;
+
+typedef struct {
+    char* name;
+    ColumnType type;
+} ColumnDef;
+
+typedef struct {
+    char* table;
+    ColumnDef* columns;
+    int column_count;
+} CreateTableStmt;
+
 typedef struct ASTNode {
     NodeType type;
     union {
@@ -84,6 +102,7 @@ typedef struct ASTNode {
         InsertStmt insert;
         DeleteStmt delete;
         UpdateStmt update;
+        CreateTableStmt create_table;
         Expr* expr;
         char* identifier;
         int integer;

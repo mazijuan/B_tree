@@ -10,53 +10,29 @@ static Expr* parser_parse_comparison(Parser* parser);
 static Expr* parser_parse_primary(Parser* parser);
 static char** parser_parse_column_list(Parser* parser, int* count);
 static Expr** parser_parse_value_list(Parser* parser, int* count);
-static char* safe_strdup(const char* s);
-
-// 安全字符串拷贝，分配失败返回NULL
-static char* safe_strdup(const char* s) {
-    if (!s) return NULL;
-    size_t len = strlen(s);
-    char* buf = (char*)malloc(len + 1);
-    if (!buf) {
-        fprintf(stderr, "malloc failed: strdup\n");
-        return NULL;
-    }
-    memcpy(buf, s, len);
-    buf[len] = '\0';
-    return buf;
-}
+static ASTNode* parser_parse_create_table(Parser* parser);
 
 Parser* parser_init(Lexer* lexer) {
-    if (!lexer) return NULL;
     Parser* parser = (Parser*)malloc(sizeof(Parser));
-    if (!parser) {
-        fprintf(stderr, "malloc failed: Parser\n");
-        return NULL;
-    }
     parser->lexer = lexer;
     parser->current_token = lexer_next_token(lexer);
     return parser;
 }
 
 void parser_destroy(Parser* parser) {
-    if (!parser) return;
-    if (parser->current_token) {
-        token_destroy(parser->current_token);
-        parser->current_token = NULL;
+    if (parser) {
+        if (parser->current_token) {
+            token_destroy(parser->current_token);
+        }
+        free(parser);
     }
-    free(parser);
 }
 
 static void parser_eat(Parser* parser, TokenType type) {
-    if (!parser || !parser->current_token) return;
     if (parser->current_token->type == type) {
         token_destroy(parser->current_token);
         parser->current_token = lexer_next_token(parser->lexer);
-        return;
     }
-    // 匹配失败简单报错，不中断解析
-    fprintf(stderr, "Syntax error: expected token type %d, got %d\n",
-            type, parser->current_token->type);
 }
 
 static char** parser_parse_column_list(Parser* parser, int* count) {
@@ -65,18 +41,13 @@ static char** parser_parse_column_list(Parser* parser, int* count) {
 
     parser_eat(parser, TK_LPAREN);
 
-    while (parser->current_token && parser->current_token->type == TK_IDENTIFIER) {
-        char** temp = (char**)realloc(columns, (*count + 1) * sizeof(char*));
-        if (!temp) {
-            fprintf(stderr, "realloc failed: column list\n");
-            break;
-        }
-        columns = temp;
-        columns[*count] = safe_strdup(parser->current_token->value);
+    while (parser->current_token->type == TK_IDENTIFIER) {
+        columns = (char**)realloc(columns, (*count + 1) * sizeof(char*));
+        columns[*count] = strdup(parser->current_token->value);
         (*count)++;
         parser_eat(parser, TK_IDENTIFIER);
 
-        if (parser->current_token && parser->current_token->type == TK_COMMA) {
+        if (parser->current_token->type == TK_COMMA) {
             parser_eat(parser, TK_COMMA);
         } else {
             break;
@@ -93,17 +64,12 @@ static Expr** parser_parse_value_list(Parser* parser, int* count) {
 
     parser_eat(parser, TK_LPAREN);
 
-    while (parser->current_token && parser->current_token->type != TK_RPAREN) {
-        Expr** temp = (Expr**)realloc(values, (*count + 1) * sizeof(Expr*));
-        if (!temp) {
-            fprintf(stderr, "realloc failed: value list\n");
-            break;
-        }
-        values = temp;
+    while (parser->current_token->type != TK_RPAREN) {
+        values = (Expr**)realloc(values, (*count + 1) * sizeof(Expr*));
         values[*count] = parser_parse_primary(parser);
         (*count)++;
 
-        if (parser->current_token && parser->current_token->type == TK_COMMA) {
+        if (parser->current_token->type == TK_COMMA) {
             parser_eat(parser, TK_COMMA);
         } else {
             break;
@@ -116,16 +82,11 @@ static Expr** parser_parse_value_list(Parser* parser, int* count) {
 
 static Expr* parser_parse_primary(Parser* parser) {
     Expr* expr = (Expr*)malloc(sizeof(Expr));
-    if (!expr) {
-        fprintf(stderr, "malloc failed: Expr primary\n");
-        return NULL;
-    }
-    memset(expr, 0, sizeof(Expr)); // 初始化联合体，避免脏数据
 
     switch (parser->current_token->type) {
         case TK_IDENTIFIER:
             expr->op = OP_IDENTIFIER;
-            expr->value.identifier = safe_strdup(parser->current_token->value);
+            expr->value.identifier = strdup(parser->current_token->value);
             parser_eat(parser, TK_IDENTIFIER);
             break;
         case TK_INTEGER:
@@ -135,19 +96,17 @@ static Expr* parser_parse_primary(Parser* parser) {
             break;
         case TK_STRING:
             expr->op = OP_STRING;
-            expr->value.string = safe_strdup(parser->current_token->value);
+            expr->value.string = strdup(parser->current_token->value);
             parser_eat(parser, TK_STRING);
             break;
         case TK_LPAREN:
             parser_eat(parser, TK_LPAREN);
-            // 释放空壳expr，替换为括号内表达式，修复内存泄漏
-            free(expr);
             expr = parser_parse_expr(parser);
             parser_eat(parser, TK_RPAREN);
             break;
         default:
             expr->op = OP_IDENTIFIER;
-            expr->value.identifier = safe_strdup("");
+            expr->value.identifier = strdup("");
             break;
     }
 
@@ -156,28 +115,40 @@ static Expr* parser_parse_primary(Parser* parser) {
 
 static Expr* parser_parse_comparison(Parser* parser) {
     Expr* left = parser_parse_primary(parser);
-    if (!left) return NULL;
 
-    ExprOp op;
+    ExprOp op = OP_IDENTIFIER;
     switch (parser->current_token->type) {
-        case TK_EQ:  op = OP_EQ;  parser_eat(parser, TK_EQ); break;
-        case TK_NE:  op = OP_NE;  parser_eat(parser, TK_NE); break;
-        case TK_LT:  op = OP_LT;  parser_eat(parser, TK_LT); break;
-        case TK_GT:  op = OP_GT;  parser_eat(parser, TK_GT); break;
-        case TK_LE:  op = OP_LE;  parser_eat(parser, TK_LE); break;
-        case TK_GE:  op = OP_GE;  parser_eat(parser, TK_GE); break;
+        case TK_EQ:
+            op = OP_EQ;
+            parser_eat(parser, TK_EQ);
+            break;
+        case TK_NE:
+            op = OP_NE;
+            parser_eat(parser, TK_NE);
+            break;
+        case TK_LT:
+            op = OP_LT;
+            parser_eat(parser, TK_LT);
+            break;
+        case TK_GT:
+            op = OP_GT;
+            parser_eat(parser, TK_GT);
+            break;
+        case TK_LE:
+            op = OP_LE;
+            parser_eat(parser, TK_LE);
+            break;
+        case TK_GE:
+            op = OP_GE;
+            parser_eat(parser, TK_GE);
+            break;
         default:
             return left;
     }
 
     Expr* right = parser_parse_primary(parser);
-    if (!right) return left;
 
     Expr* result = (Expr*)malloc(sizeof(Expr));
-    if (!result) {
-        fprintf(stderr, "malloc failed: comparison expr\n");
-        return left;
-    }
     result->op = op;
     result->value.binary.left = left;
     result->value.binary.right = right;
@@ -187,23 +158,14 @@ static Expr* parser_parse_comparison(Parser* parser) {
 
 static Expr* parser_parse_expr(Parser* parser) {
     Expr* left = parser_parse_comparison(parser);
-    if (!left) return NULL;
 
-    while (parser->current_token) {
-        TokenType t = parser->current_token->type;
-        if (t != TK_AND && t != TK_OR) break;
-
-        ExprOp op = (t == TK_AND) ? OP_AND : OP_OR;
-        parser_eat(parser, t);
+    while (parser->current_token->type == TK_AND || parser->current_token->type == TK_OR) {
+        ExprOp op = parser->current_token->type == TK_AND ? OP_AND : OP_OR;
+        parser_eat(parser, parser->current_token->type);
 
         Expr* right = parser_parse_comparison(parser);
-        if (!right) break;
 
         Expr* result = (Expr*)malloc(sizeof(Expr));
-        if (!result) {
-            fprintf(stderr, "malloc failed: logic expr\n");
-            break;
-        }
         result->op = op;
         result->value.binary.left = left;
         result->value.binary.right = right;
@@ -217,37 +179,27 @@ static ASTNode* parser_parse_select(Parser* parser) {
     parser_eat(parser, TK_SELECT);
 
     ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
-    if (!node) {
-        fprintf(stderr, "malloc failed: SELECT ASTNode\n");
-        return NULL;
-    }
-    memset(node, 0, sizeof(ASTNode));
     node->type = NODE_SELECT;
     node->value.select.columns = NULL;
     node->value.select.column_count = 0;
-    node->value.select.where = NULL;
 
     if (parser->current_token->type == TK_ASTERISK) {
         node->value.select.columns = (char**)malloc(sizeof(char*));
-        if (node->value.select.columns) {
-            node->value.select.columns[0] = safe_strdup("*");
-            node->value.select.column_count = 1;
-        }
+        node->value.select.columns[0] = strdup("*");
+        node->value.select.column_count = 1;
         parser_eat(parser, TK_ASTERISK);
     } else {
-        while (parser->current_token && parser->current_token->type == TK_IDENTIFIER) {
-            char** temp = (char**)realloc(
+        while (parser->current_token->type == TK_IDENTIFIER) {
+            node->value.select.columns = (char**)realloc(
                 node->value.select.columns,
                 (node->value.select.column_count + 1) * sizeof(char*)
             );
-            if (!temp) break;
-            node->value.select.columns = temp;
-            node->value.select.columns[node->value.select.column_count] =
-                safe_strdup(parser->current_token->value);
+            node->value.select.columns[node->value.select.column_count] = 
+                strdup(parser->current_token->value);
             node->value.select.column_count++;
             parser_eat(parser, TK_IDENTIFIER);
 
-            if (parser->current_token && parser->current_token->type == TK_COMMA) {
+            if (parser->current_token->type == TK_COMMA) {
                 parser_eat(parser, TK_COMMA);
             } else {
                 break;
@@ -256,14 +208,14 @@ static ASTNode* parser_parse_select(Parser* parser) {
     }
 
     parser_eat(parser, TK_FROM);
-    if (parser->current_token) {
-        node->value.select.table = safe_strdup(parser->current_token->value);
-        parser_eat(parser, TK_IDENTIFIER);
-    }
+    node->value.select.table = strdup(parser->current_token->value);
+    parser_eat(parser, TK_IDENTIFIER);
 
-    if (parser->current_token && parser->current_token->type == TK_WHERE) {
+    if (parser->current_token->type == TK_WHERE) {
         parser_eat(parser, TK_WHERE);
         node->value.select.where = parser_parse_expr(parser);
+    } else {
+        node->value.select.where = NULL;
     }
 
     return node;
@@ -274,25 +226,17 @@ static ASTNode* parser_parse_insert(Parser* parser) {
     parser_eat(parser, TK_INTO);
 
     ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
-    if (!node) {
-        fprintf(stderr, "malloc failed: INSERT ASTNode\n");
-        return NULL;
-    }
-    memset(node, 0, sizeof(ASTNode));
     node->type = NODE_INSERT;
+    node->value.insert.table = strdup(parser->current_token->value);
+    parser_eat(parser, TK_IDENTIFIER);
 
-    if (parser->current_token) {
-        node->value.insert.table = safe_strdup(parser->current_token->value);
-        parser_eat(parser, TK_IDENTIFIER);
-    }
-
-    int col_count = 0;
+    int col_count;
     node->value.insert.columns = parser_parse_column_list(parser, &col_count);
     node->value.insert.column_count = col_count;
 
     parser_eat(parser, TK_VALUES);
 
-    int val_count = 0;
+    int val_count;
     node->value.insert.values = parser_parse_value_list(parser, &val_count);
     node->value.insert.value_count = val_count;
 
@@ -304,21 +248,15 @@ static ASTNode* parser_parse_delete(Parser* parser) {
     parser_eat(parser, TK_FROM);
 
     ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
-    if (!node) {
-        fprintf(stderr, "malloc failed: DELETE ASTNode\n");
-        return NULL;
-    }
-    memset(node, 0, sizeof(ASTNode));
     node->type = NODE_DELETE;
+    node->value.delete.table = strdup(parser->current_token->value);
+    parser_eat(parser, TK_IDENTIFIER);
 
-    if (parser->current_token) {
-        node->value.delete.table = safe_strdup(parser->current_token->value);
-        parser_eat(parser, TK_IDENTIFIER);
-    }
-
-    if (parser->current_token && parser->current_token->type == TK_WHERE) {
+    if (parser->current_token->type == TK_WHERE) {
         parser_eat(parser, TK_WHERE);
         node->value.delete.where = parser_parse_expr(parser);
+    } else {
+        node->value.delete.where = NULL;
     }
 
     return node;
@@ -328,71 +266,120 @@ static ASTNode* parser_parse_update(Parser* parser) {
     parser_eat(parser, TK_UPDATE);
 
     ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
-    if (!node) {
-        fprintf(stderr, "malloc failed: UPDATE ASTNode\n");
-        return NULL;
-    }
-    memset(node, 0, sizeof(ASTNode));
     node->type = NODE_UPDATE;
-    node->value.update.columns = NULL;
-    node->value.update.values = NULL;
-    node->value.update.set_count = 0;
-    node->value.update.where = NULL;
-
-    if (parser->current_token) {
-        node->value.update.table = safe_strdup(parser->current_token->value);
-        parser_eat(parser, TK_IDENTIFIER);
-    }
+    node->value.update.table = strdup(parser->current_token->value);
+    parser_eat(parser, TK_IDENTIFIER);
 
     parser_eat(parser, TK_SET);
 
-    while (parser->current_token && parser->current_token->type == TK_IDENTIFIER) {
-        char* column = safe_strdup(parser->current_token->value);
+    node->value.update.columns = NULL;
+    node->value.update.values = NULL;
+    node->value.update.set_count = 0;
+
+    while (parser->current_token->type == TK_IDENTIFIER) {
+        char* column = strdup(parser->current_token->value);
         parser_eat(parser, TK_IDENTIFIER);
         parser_eat(parser, TK_EQ);
 
         Expr* value = parser_parse_primary(parser);
 
-        char** col_temp = (char**)realloc(
+        node->value.update.columns = (char**)realloc(
             node->value.update.columns,
             (node->value.update.set_count + 1) * sizeof(char*)
         );
-        Expr** val_temp = (Expr**)realloc(
+        node->value.update.values = (Expr**)realloc(
             node->value.update.values,
             (node->value.update.set_count + 1) * sizeof(Expr*)
         );
-        if (!col_temp || !val_temp) break;
-
-        node->value.update.columns = col_temp;
-        node->value.update.values = val_temp;
         node->value.update.columns[node->value.update.set_count] = column;
         node->value.update.values[node->value.update.set_count] = value;
         node->value.update.set_count++;
 
-        if (parser->current_token && parser->current_token->type == TK_COMMA) {
+        if (parser->current_token->type == TK_COMMA) {
             parser_eat(parser, TK_COMMA);
         } else {
             break;
         }
     }
 
-    if (parser->current_token && parser->current_token->type == TK_WHERE) {
+    if (parser->current_token->type == TK_WHERE) {
         parser_eat(parser, TK_WHERE);
         node->value.update.where = parser_parse_expr(parser);
+    } else {
+        node->value.update.where = NULL;
     }
 
     return node;
 }
 
+static ASTNode* parser_parse_create_table(Parser* parser) {
+    parser_eat(parser, TK_CREATE);
+    parser_eat(parser, TK_TABLE);
+
+    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    node->type = NODE_CREATE_TABLE;
+    node->value.create_table.table = strdup(parser->current_token->value);
+    parser_eat(parser, TK_IDENTIFIER);
+
+    parser_eat(parser, TK_LPAREN);
+
+    node->value.create_table.columns = NULL;
+    node->value.create_table.column_count = 0;
+
+    while (parser->current_token->type == TK_IDENTIFIER) {
+        ColumnDef col;
+        col.name = strdup(parser->current_token->value);
+        parser_eat(parser, TK_IDENTIFIER);
+
+        switch (parser->current_token->type) {
+            case TK_INT:
+                col.type = TYPE_INT;
+                parser_eat(parser, TK_INT);
+                break;
+            case TK_VARCHAR:
+                col.type = TYPE_VARCHAR;
+                parser_eat(parser, TK_VARCHAR);
+                break;
+            case TK_TEXT:
+                col.type = TYPE_TEXT;
+                parser_eat(parser, TK_TEXT);
+                break;
+            default:
+                col.type = TYPE_TEXT;
+                break;
+        }
+
+        node->value.create_table.columns = (ColumnDef*)realloc(
+            node->value.create_table.columns,
+            (node->value.create_table.column_count + 1) * sizeof(ColumnDef)
+        );
+        node->value.create_table.columns[node->value.create_table.column_count] = col;
+        node->value.create_table.column_count++;
+
+        if (parser->current_token->type == TK_COMMA) {
+            parser_eat(parser, TK_COMMA);
+        } else {
+            break;
+        }
+    }
+
+    parser_eat(parser, TK_RPAREN);
+    return node;
+}
+
 ASTNode* parser_parse(Parser* parser) {
-    if (!parser || !parser->current_token) return NULL;
     switch (parser->current_token->type) {
-        case TK_SELECT:  return parser_parse_select(parser);
-        case TK_INSERT:  return parser_parse_insert(parser);
-        case TK_DELETE:  return parser_parse_delete(parser);
-        case TK_UPDATE:  return parser_parse_update(parser);
+        case TK_SELECT:
+            return parser_parse_select(parser);
+        case TK_INSERT:
+            return parser_parse_insert(parser);
+        case TK_DELETE:
+            return parser_parse_delete(parser);
+        case TK_UPDATE:
+            return parser_parse_update(parser);
+        case TK_CREATE:
+            return parser_parse_create_table(parser);
         default:
-            fprintf(stderr, "Unsupported SQL keyword token\n");
             return NULL;
     }
 }
@@ -413,16 +400,17 @@ static void expr_destroy(Expr* expr) {
             expr_destroy(expr->value.binary.right);
             break;
         case OP_IDENTIFIER:
-            free(expr->value.identifier);
+            if (expr->value.identifier) free(expr->value.identifier);
             break;
         case OP_STRING:
-            free(expr->value.string);
+            if (expr->value.string) free(expr->value.string);
             break;
         case OP_INTEGER:
             break;
         default:
             break;
     }
+
     free(expr);
 }
 
@@ -430,57 +418,71 @@ void ast_destroy(ASTNode* node) {
     if (!node) return;
 
     switch (node->type) {
-        case NODE_SELECT: {
-            SelectStmt* s = &node->value.select;
-            if (s->columns) {
-                for (int i = 0; i < s->column_count; i++) free(s->columns[i]);
-                free(s->columns);
+        case NODE_SELECT:
+            if (node->value.select.columns) {
+                for (int i = 0; i < node->value.select.column_count; i++) {
+                    free(node->value.select.columns[i]);
+                }
+                free(node->value.select.columns);
             }
-            free(s->table);
-            expr_destroy(s->where);
+            if (node->value.select.table) free(node->value.select.table);
+            expr_destroy(node->value.select.where);
             break;
-        }
-        case NODE_INSERT: {
-            InsertStmt* ins = &node->value.insert;
-            free(ins->table);
-            if (ins->columns) {
-                for (int i = 0; i < ins->column_count; i++) free(ins->columns[i]);
-                free(ins->columns);
+        case NODE_INSERT:
+            if (node->value.insert.table) free(node->value.insert.table);
+            if (node->value.insert.columns) {
+                for (int i = 0; i < node->value.insert.column_count; i++) {
+                    free(node->value.insert.columns[i]);
+                }
+                free(node->value.insert.columns);
             }
-            if (ins->values) {
-                for (int i = 0; i < ins->value_count; i++) expr_destroy(ins->values[i]);
-                free(ins->values);
+            if (node->value.insert.values) {
+                for (int i = 0; i < node->value.insert.value_count; i++) {
+                    expr_destroy(node->value.insert.values[i]);
+                }
+                free(node->value.insert.values);
             }
             break;
-        }
-        case NODE_DELETE: {
-            DeleteStmt* d = &node->value.delete;
-            free(d->table);
-            expr_destroy(d->where);
+        case NODE_DELETE:
+            if (node->value.delete.table) free(node->value.delete.table);
+            expr_destroy(node->value.delete.where);
             break;
-        }
-        case NODE_UPDATE: {
-            UpdateStmt* u = &node->value.update;
-            free(u->table);
-            if (u->columns) {
-                for (int i = 0; i < u->set_count; i++) free(u->columns[i]);
-                free(u->columns);
+        case NODE_UPDATE:
+            if (node->value.update.table) free(node->value.update.table);
+            if (node->value.update.columns) {
+                for (int i = 0; i < node->value.update.set_count; i++) {
+                    free(node->value.update.columns[i]);
+                }
+                free(node->value.update.columns);
             }
-            if (u->values) {
-                for (int i = 0; i < u->set_count; i++) expr_destroy(u->values[i]);
-                free(u->values);
+            if (node->value.update.values) {
+                for (int i = 0; i < node->value.update.set_count; i++) {
+                    expr_destroy(node->value.update.values[i]);
+                }
+                free(node->value.update.values);
             }
-            expr_destroy(u->where);
+            expr_destroy(node->value.update.where);
             break;
-        }
+        case NODE_CREATE_TABLE:
+            if (node->value.create_table.table) free(node->value.create_table.table);
+            if (node->value.create_table.columns) {
+                for (int i = 0; i < node->value.create_table.column_count; i++) {
+                    if (node->value.create_table.columns[i].name) {
+                        free(node->value.create_table.columns[i].name);
+                    }
+                }
+                free(node->value.create_table.columns);
+            }
+            break;
         case NODE_IDENTIFIER:
-            free(node->value.identifier);
+            if (node->value.identifier) free(node->value.identifier);
             break;
         case NODE_STRING:
-            free(node->value.string);
+            if (node->value.string) free(node->value.string);
             break;
         default:
             break;
     }
+
     free(node);
 }
