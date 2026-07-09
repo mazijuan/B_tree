@@ -77,16 +77,21 @@ void db_close(Database* db) {
 }
 
 int db_begin_transaction(Database* db) {
-    if (!db || !db->wal) return -1;
-    return wal_begin_transaction(db->wal);
+    if (!db) return -1;
+    if (db->wal) wal_begin_transaction(db->wal);
+    return executor_begin_transaction(db->executor);
 }
 
 int db_commit(Database* db) {
-    if (!db || !db->wal) return -1;
-    return wal_commit(db->wal);
+    if (!db) return -1;
+    executor_commit(db->executor);
+    if (db->wal) return wal_commit(db->wal);
+    return 0;
 }
 
 int db_rollback(Database* db) {
-    if (!db || !db->wal) return -1;
-    return wal_rollback(db->wal);
+    if (!db) return -1;
+    executor_rollback(db->executor);
+    if (db->wal) return wal_rollback(db->wal);
+    return 0;
 }
